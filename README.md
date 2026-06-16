@@ -33,18 +33,39 @@ no Apple-ID password**. Credentials are only needed for the one-time install (be
 
 ### 1. Generate the pairing record (off-cluster, USB once)
 
-On any machine with the iPhone plugged in via USB and WiFi sync enabled:
+On any machine with the iPhone plugged in via USB (unlocked, "Trust This Computer"
+tapped) and WiFi sync enabled. Install the libimobiledevice **tools** — note there's no
+command literally called `libimobiledevice`; it ships `idevicepair`, `idevice_id`, etc.:
 
 ```bash
-# macOS:   brew install libimobiledevice usbmuxd
-# Debian:  apt install libimobiledevice-utils usbmuxd
-idevicepair pair        # creates /var/lib/lockdown/<UDID>.plist  (macOS: /var/db/lockdown)
+# macOS:  brew install libimobiledevice          # tools land on PATH as idevice*
+#         (macOS already runs its own usbmuxd — no usbmuxd daemon needed)
+# Debian: apt install libimobiledevice-utils usbmuxd
+
 idevice_id -l           # prints the <UDID>
+idevicepair pair        # → "SUCCESS: Paired with device <UDID>"
+idevicepair validate    # confirm the pairing stuck
 ```
 
-Copy `<UDID>.plist` out — this is the only thing the cluster needs from the device. Seal
-it into the chart's `altserver-pairing-record` SealedSecret (the Helm chart README shows
-the `kubeseal` command). The phone never touches the cluster again.
+The pairing record (`<UDID>.plist`) is written by the system usbmuxd to:
+
+- **macOS:** `/var/db/lockdown/<UDID>.plist` (root-owned, **TCC-protected** — grant your
+  terminal app *Full Disk Access* in System Settings → Privacy & Security, then reopen it)
+- **Linux:** `/var/lib/lockdown/<UDID>.plist`
+
+Copy it out — it's the only thing the cluster needs from the device:
+
+```bash
+UDID=$(idevice_id -l)
+sudo cp "/var/db/lockdown/$UDID.plist" "./$UDID.plist"   # macOS path
+sudo chown "$(whoami)" "./$UDID.plist"
+```
+
+Seal it into the chart's `altserver-pairing-record` SealedSecret (the Helm chart README
+shows the `kubeseal` command). The phone never touches the cluster again.
+
+> Inside the pod the entrypoint copies this record to `/var/lib/lockdown` (the Linux
+> path netmuxd expects) — don't confuse that container path with where it lives on a Mac.
 
 ### 2. Install AltStore on the device (one-time, needs credentials)
 
