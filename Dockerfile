@@ -2,7 +2,10 @@
 #
 # Runs in a Kubernetes hostNetwork pod (mDNS device discovery needs the node's LAN).
 # anisette is provided by a separate sidecar container, reached on 127.0.0.1:6969.
-FROM debian:bookworm-slim
+#
+# Base: trixie (GLIBC 2.41). netmuxd's release binary needs GLIBC >= 2.38, so
+# bookworm (2.36) fails at runtime with "GLIBC_2.38 not found".
+FROM debian:trixie-slim
 
 # buildx sets TARGETARCH per platform (amd64 / arm64). Pinned upstream versions.
 ARG TARGETARCH
@@ -11,7 +14,7 @@ ARG NETMUXD_VERSION=0.3.2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl \
-      usbmuxd libimobiledevice6 libimobiledevice-utils \
+      usbmuxd libimobiledevice-1.0-6 libimobiledevice-utils \
       avahi-daemon avahi-utils libavahi-compat-libdnssd1 dbus \
     && rm -rf /var/lib/apt/lists/*
 

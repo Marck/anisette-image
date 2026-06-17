@@ -22,11 +22,16 @@ else
   log "WiFi refresh needs a pairing record generated off-cluster once (see README)."
 fi
 
-# 2. dbus + avahi for mDNS (netmuxd also does its own mDNS; toggle with ENABLE_AVAHI).
+# 2. dbus + avahi for mDNS — AltServer advertises _altserver._tcp via libdns_sd
+#    (avahi-compat), so avahi must be up. Toggle with ENABLE_AVAHI.
 if [ "${ENABLE_AVAHI:-true}" = "true" ] && command -v avahi-daemon >/dev/null 2>&1; then
+  dbus-uuidgen --ensure || true                 # avahi/dbus need a machine-id
   mkdir -p /run/dbus && rm -f /run/dbus/pid
   dbus-daemon --system --fork || log "dbus-daemon failed (continuing)"
-  avahi-daemon --no-chroot -D || log "avahi-daemon failed (continuing)"
+  for _ in $(seq 1 10); do                       # wait for the system bus socket
+    [ -S /run/dbus/system_bus_socket ] && break; sleep 0.3
+  done
+  avahi-daemon --no-chroot --no-rlimits -D || log "avahi-daemon failed (continuing)"
 fi
 
 # 3. netmuxd — discovers the device over WiFi (mDNS) and serves the usbmuxd socket.
