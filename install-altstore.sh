@@ -4,9 +4,9 @@
 #
 # Why this can't be fully automated: Apple 2FA prompts for a one-time code (sent to
 # the device, ~30s TTL) during auth, so the install is inherently interactive. This
-# helper just removes the boilerplate: it auto-detects the UDID via netmuxd, uses the
-# pre-staged IPA by default, reads the password without echoing it, and points AltServer
-# at the anisette sidecar.
+# helper just removes the boilerplate: it derives the UDID from the pairing record file
+# (idevice_id -l is empty with netmuxd), uses the pre-staged IPA by default, reads the
+# password without echoing it, and points AltServer at the anisette sidecar.
 set -euo pipefail
 
 APPLE_ID="${1:-}"
@@ -32,14 +32,18 @@ if [ ! -f "$IPA" ]; then
   exit 1
 fi
 
-# The device must already be visible through netmuxd (WiFi sync on, same LAN).
-UDID="$(idevice_id -l 2>/dev/null | head -n1 || true)"
+# Derive the UDID from the pairing record filename. netmuxd does NOT implement the usbmux
+# "subscribe" call, so `idevice_id -l` is empty even when the device is registered — don't
+# rely on it. The pairing record (which netmuxd needs anyway) is named <UDID>.plist.
+# Override with the UDID env var if needed.
+LOCKDOWN_DIR="${LOCKDOWN_DIR:-/var/lib/lockdown}"
+UDID="${UDID:-$(ls "${LOCKDOWN_DIR}"/*.plist 2>/dev/null | head -n1 | xargs -r basename 2>/dev/null | sed 's/\.plist$//')}"
 if [ -z "$UDID" ]; then
-  echo "ERROR: no device visible to netmuxd (idevice_id -l is empty)." >&2
-  echo "  Enable 'Show this iPhone when on Wi-Fi', put the phone on the same LAN, and retry." >&2
+  echo "ERROR: no pairing record in ${LOCKDOWN_DIR} and no UDID env set." >&2
+  echo "  Seal the device pairing record into altserver-pairing-record first (see README)." >&2
   exit 1
 fi
-echo "Target device: $UDID"
+echo "Target device: $UDID  (from pairing record; verify it's in netmuxd's 'Adding device' log)"
 echo "IPA:           $IPA"
 
 # Read the password without echoing or putting it in the exec command line / shell history.
