@@ -22,6 +22,17 @@ else
   log "WiFi refresh needs a pairing record generated off-cluster once (see README)."
 fi
 
+# 1b. Optionally pre-stage the AltStore IPA so `install-altstore` can use it without a
+#     kubectl cp. Only downloads when ALTSTORE_IPA_URL is set; safe to leave unset.
+ALTSTORE_IPA_PATH="${ALTSTORE_IPA_PATH:-/var/lib/altserver/AltStore.ipa}"
+if [ -n "${ALTSTORE_IPA_URL:-}" ] && [ ! -f "${ALTSTORE_IPA_PATH}" ]; then
+  mkdir -p "$(dirname "${ALTSTORE_IPA_PATH}")"
+  log "Pre-staging AltStore IPA from ${ALTSTORE_IPA_URL}"
+  curl -fsSL -o "${ALTSTORE_IPA_PATH}" "${ALTSTORE_IPA_URL}" \
+    || log "IPA download failed (continuing; install-altstore can still fetch on demand)"
+fi
+export ALTSTORE_IPA_PATH
+
 # 2. dbus + avahi for mDNS — AltServer advertises _altserver._tcp via libdns_sd
 #    (avahi-compat), so avahi must be up. Toggle with ENABLE_AVAHI.
 if [ "${ENABLE_AVAHI:-true}" = "true" ] && command -v avahi-daemon >/dev/null 2>&1; then

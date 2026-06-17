@@ -35,12 +35,14 @@ RUN set -eux; \
     chmod +x /usr/local/bin/netmuxd
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY install-altstore.sh /usr/local/bin/install-altstore
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/install-altstore
 
 # Defaults overridable from the Helm chart.
 ENV ALTSERVER_ANISETTE_SERVER=http://127.0.0.1:6969 \
     PAIRING_RECORD_DIR=/secrets/lockdown \
-    LOCKDOWN_DIR=/var/lib/lockdown
+    LOCKDOWN_DIR=/var/lib/lockdown \
+    ALTSTORE_IPA_PATH=/var/lib/altserver/AltStore.ipa
 
 # Runs as root: usbmuxd/netmuxd/avahi need to bind the mux socket and do mDNS.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
