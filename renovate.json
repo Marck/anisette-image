@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "github>marck/renovate-config"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\nARG \\w+=(?<currentValue>\\S+)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "AltServer-Linux + netmuxd + AltStore are a tightly-coupled client/server stack with no published compatibility matrix. Group them into one reviewed PR and never auto-merge — the combo can only be verified with a real device + the CI smoke build.",
+      "matchManagers": ["custom.regex"],
+      "groupName": "altserver stack",
+      "automerge": false
+    },
+    {
+      "description": "Track AltStore Classic only (1.x). AltStore PAL (2.x) is the EU marketplace and does not use AltServer.",
+      "matchDepNames": ["altstoreio/AltStore"],
+      "allowedVersions": "<2.0.0"
+    }
+  ]
+}

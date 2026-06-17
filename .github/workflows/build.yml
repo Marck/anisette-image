@@ -20,9 +20,48 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Catches binary-level breakage from version bumps (e.g. a netmuxd build needing a newer
+  # GLIBC, or a missing AltStore IPA) before anything is published. Cannot verify device
+  # refresh — that still needs a real iPhone — but covers everything that runs without one.
+  smoke:
+    name: Smoke test image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image (load locally)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: altserver-wifi:smoke
+          cache-from: type=gha,scope=linux/amd64
+
+      - name: Verify binaries, baked IPA, and dbus/avahi startup
+        run: |
+          docker run --rm --entrypoint /bin/bash altserver-wifi:smoke -c '
+            set -euo pipefail
+            echo "glibc: $(ldd --version | head -1)"
+            netmuxd --help >/dev/null && echo "✓ netmuxd runs"
+            test -x /usr/local/bin/AltServer && echo "✓ AltServer present"
+            command -v idevice_id >/dev/null && echo "✓ idevice_id present"
+            command -v install-altstore >/dev/null && echo "✓ install-altstore present"
+            sz=$(stat -c%s /var/lib/altserver/AltStore.ipa); test "$sz" -gt 1000000 \
+              && echo "✓ AltStore IPA baked ($sz bytes)"
+            dbus-uuidgen --ensure; mkdir -p /run/dbus
+            dbus-daemon --system --fork
+            for _ in $(seq 1 10); do [ -S /run/dbus/system_bus_socket ] && break; sleep 0.3; done
+            avahi-daemon --no-chroot --no-rlimits -D && echo "✓ dbus + avahi start"
+          '
+
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    needs: [smoke]
     permissions:
       contents: read
       packages: write

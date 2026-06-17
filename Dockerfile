@@ -7,10 +7,17 @@
 # bookworm (2.36) fails at runtime with "GLIBC_2.38 not found".
 FROM debian:trixie-slim
 
-# buildx sets TARGETARCH per platform (amd64 / arm64). Pinned upstream versions.
+# buildx sets TARGETARCH per platform (amd64 / arm64).
 ARG TARGETARCH
+# Pinned upstream versions — Renovate keeps these in lockstep via the grouped
+# "altserver stack" custom managers (see renovate.json); each bump is reviewed + the
+# image smoke-tested in CI before release.
+# renovate: datasource=github-releases depName=NyaMisty/AltServer-Linux
 ARG ALTSERVER_VERSION=0.0.5
+# renovate: datasource=github-releases depName=jkcoxson/netmuxd
 ARG NETMUXD_VERSION=0.3.2
+# renovate: datasource=github-tags depName=altstoreio/AltStore versioning=loose
+ARG ALTSTORE_VERSION=1.6.3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl \
@@ -33,6 +40,15 @@ RUN set -eux; \
     tar -xzf /tmp/netmuxd.tar.gz -C /usr/local/bin; \
     rm /tmp/netmuxd.tar.gz; \
     chmod +x /usr/local/bin/netmuxd
+
+# Bake AltStore Classic (arch-independent IPA) so install-altstore works offline and the
+# whole client+server stack is versioned as one image. The CDN path uses underscores for
+# dots (1.6.3 -> 1_6_3). A runtime ALTSTORE_IPA_URL still overrides this if set.
+RUN set -eux; \
+    mkdir -p /var/lib/altserver; \
+    ver="$(echo "${ALTSTORE_VERSION}" | tr '.' '_')"; \
+    curl -fsSL -o /var/lib/altserver/AltStore.ipa \
+      "https://cdn.altstore.io/file/altstore/apps/altstore/${ver}.ipa"
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY install-altstore.sh /usr/local/bin/install-altstore
