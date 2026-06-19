@@ -1,0 +1,190 @@
+name: Build and Publish
+
+# Mirror-build of dadoum/anisette-v3-server.
+#
+# Upstream only ever publishes a single `latest` tag, and that image is ~a year
+# stale — it misses the updated Provision library, libplist deps, and the
+# pre-created provisioning folder (upstream PR #47) that the SideStore login path
+# needs. Rather than guess which upstream change fixes things, we build upstream's
+# own Dockerfile at a *pinned commit* and publish a fresh, reproducible image to
+# our GHCR. Renovate (git-refs) raises a PR to bump the pin when upstream moves, so
+# updates are deliberate and reviewable.
+#
+# We do NOT vendor a Dockerfile: the build context is upstream's repo at UPSTREAM_REF
+# (buildx git context), so we always build their exact, current Dockerfile.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - main
+  # Weekly rebuild so the debian:stable base picks up security updates even when
+  # the pinned upstream commit hasn't moved.
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/marck/anisette-v3-server
+  UPSTREAM_REPO: Dadoum/anisette-v3-server
+  # renovate: datasource=git-refs depName=Dadoum/anisette-v3-server currentValue=main
+  UPSTREAM_REF: "f749edcb80d803afafae34acaf32c848a955bbd4"
+
+jobs:
+  # Builds the image and asserts the things that actually broke SideStore before
+  # publishing: the server binary, the non-root user, and — critically — the
+  # pre-created provisioning folder from upstream PR #47 (the -45054 fix). This is
+  # the whole reason we stopped using the stale upstream `latest`.
+  smoke:
+    name: Smoke test image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image (load locally)
+        uses: docker/build-push-action@v6
+        with:
+          context: "https://github.com/${{ env.UPSTREAM_REPO }}.git#${{ env.UPSTREAM_REF }}"
+          load: true
+          tags: anisette:smoke
+          cache-from: type=gha,scope=linux/amd64
+
+      - name: Verify binary, non-root user, and PR#47 provisioning folder
+        run: |
+          docker run --rm --entrypoint sh anisette:smoke -c '
+            set -eu
+            test -x /opt/anisette-v3-server && echo "✓ anisette-v3-server binary present"
+            id Alcoholic >/dev/null && echo "✓ non-root user Alcoholic present"
+            # The -45054 fix: upstream PR #47 pre-creates this in the Dockerfile.
+            test -d /opt/anisette-v3/provisioning \
+              && echo "✓ /opt/anisette-v3/provisioning present (PR #47)" \
+              || { echo "✗ provisioning folder MISSING — upstream pin predates PR #47"; exit 1; }
+            owner=$(stat -c "%U" /opt/anisette-v3/provisioning)
+            test "$owner" = "Alcoholic" && echo "✓ provisioning folder owned by Alcoholic"
+          '
+
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    needs: [smoke]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Short upstream ref
+        id: ref
+        run: echo "short=${UPSTREAM_REF:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=upstream-${{ steps.ref.outputs.short }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: "https://github.com/${{ env.UPSTREAM_REPO }}.git#${{ env.UPSTREAM_REF }}"
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifests and push
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Short upstream ref
+        id: ref
+        run: echo "short=${UPSTREAM_REF:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=upstream-${{ steps.ref.outputs.short }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Create and push multi-platform manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect \
+            ${{ env.IMAGE_NAME }}:upstream-${{ steps.ref.outputs.short }}

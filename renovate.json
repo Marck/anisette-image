@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "github>marck/renovate-config"
+  ],
+  "customManagers": [
+    {
+      "description": "Track the pinned upstream commit we mirror-build (UPSTREAM_REF in the build workflow). git-refs against the main branch raises a PR to bump the digest when upstream moves.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/build\\.ya?ml$/"],
+      "matchStrings": [
+        "datasource=git-refs depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+)\\s+UPSTREAM_REF:\\s*\"(?<currentDigest>[a-f0-9]{40})\""
+      ],
+      "datasourceTemplate": "git-refs"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "anisette-v3-server bundles Apple's closed-source ADI libs and a D build; an upstream bump can change provisioning behaviour and can only be fully verified with a real device. Never auto-merge — review + the CI smoke build (which asserts the PR #47 provisioning folder) gate each bump.",
+      "matchDepNames": ["Dadoum/anisette-v3-server"],
+      "automerge": false
+    }
+  ]
+}
