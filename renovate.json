@@ -6,25 +6,20 @@
   ],
   "customManagers": [
     {
+      "description": "Track the pinned upstream commit we mirror-build (UPSTREAM_REF in the build workflow). git-refs against the main branch raises a PR to bump the digest when upstream moves.",
       "customType": "regex",
-      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "managerFilePatterns": ["/^\\.github/workflows/build\\.ya?ml$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\nARG \\w+=(?<currentValue>\\S+)"
+        "datasource=git-refs depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+)\\s+UPSTREAM_REF:\\s*\"(?<currentDigest>[a-f0-9]{40})\""
       ],
-      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+      "datasourceTemplate": "git-refs"
     }
   ],
   "packageRules": [
     {
-      "description": "AltServer-Linux + netmuxd + AltStore are a tightly-coupled client/server stack with no published compatibility matrix. Group them into one reviewed PR and never auto-merge — the combo can only be verified with a real device + the CI smoke build.",
-      "matchManagers": ["custom.regex"],
-      "groupName": "altserver stack",
+      "description": "anisette-v3-server bundles Apple's closed-source ADI libs and a D build; an upstream bump can change provisioning behaviour and can only be fully verified with a real device. Never auto-merge — review + the CI smoke build (which asserts the PR #47 provisioning folder) gate each bump.",
+      "matchDepNames": ["Dadoum/anisette-v3-server"],
       "automerge": false
-    },
-    {
-      "description": "Track AltStore Classic only (1.x). AltStore PAL (2.x) is the EU marketplace and does not use AltServer.",
-      "matchDepNames": ["altstoreio/AltStore"],
-      "allowedVersions": "<2.0.0"
     }
   ]
 }

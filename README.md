@@ -1,59 +1,74 @@
-# altserver-wifi
+# anisette-image
 
-A small container image bundling [AltServer-Linux](https://github.com/NyaMisty/AltServer-Linux)
-and [netmuxd](https://github.com/jkcoxson/netmuxd) for **headless, USB-free WiFi refresh**
-of sideloaded iOS apps (AltStore Classic). Built for `linux/amd64` + `linux/arm64` and
-published to `ghcr.io/marck/altserver-wifi` (private).
+Mirror-build of [**dadoum/anisette-v3-server**](https://github.com/Dadoum/anisette-v3-server)
+to **`ghcr.io/marck/anisette-v3-server`** — a fresh, reproducible, multi-arch image consumed by the
+[`anisette` Helm chart](https://github.com/Marck/helm-charts/tree/main/helm-charts/anisette) for
+[SideStore](https://sidestore.io).
 
-Designed to run in a Kubernetes **hostNetwork** pod (deployed by the `altserver` Helm
-chart in [helm-charts](https://github.com/Marck/helm-charts)), with
-[anisette](https://github.com/Dadoum/anisette-v3-server) as a **sidecar** reached on
-`127.0.0.1:6969`.
+## Why this exists
 
-## Why hostNetwork / why this is USB-free
+Upstream only ever publishes a single **`latest`** Docker tag, and that image is **~a year stale**.
+It predates a series of fixes that the SideStore login path needs — most importantly the pre-created
+provisioning folder from [upstream PR #47](https://github.com/Dadoum/anisette-v3-server/pull/47).
+Running the stale `latest` produces `generic libc/file manipulation error (-45054)` at provisioning,
+because the Apple ADI lib does a *non-recursive* `mkdir(<runtimeDir>/anisette-v3/provisioning/<uuid>)`
+whose parent doesn't exist.
 
-- AltStore Classic re-signs apps with a free Apple developer certificate (the same
-  mechanism as Sideloadly). Signatures expire after **7 days** (free accounts: max
-  **3 apps**), so apps must be periodically re-signed — that's what this does.
-- The device is reached over WiFi via **mDNS** (`_apple-mobdev2._tcp`). Kubernetes pod
-  overlays don't pass multicast, so the pod must share the node's network namespace
-  (`hostNetwork: true`) and sit on the **same LAN/VLAN** as the iPhone.
-- No USB on the cluster: after a **one-time pairing done off-cluster**, netmuxd connects
-  to the device over WiFi using the pairing record. The phone is never plugged into the
-  cluster.
+Rather than guess which upstream commit fixes things, this repo **builds upstream's own Dockerfile at
+a pinned commit** and publishes the result to our registry. Updates are deliberate: Renovate raises a
+PR to bump the pin, and CI refuses to publish an image that's missing the provisioning folder.
 
-## How refresh works (no stored credentials)
+## How it works
 
-`entrypoint.sh` stages the pairing record, starts avahi/dbus (mDNS) and `netmuxd`, then
-runs **`AltServer` in daemon mode (no arguments)**. The AltStore app on the device drives
-refresh and supplies Apple-ID credentials per request — so the **running container stores
-no Apple-ID password**. Credentials are only needed for the one-time install (below).
+- **No vendored Dockerfile.** The build context is upstream's repo at the pinned commit
+  (`buildx` git context), so we always build their exact, current Dockerfile —
+  see [`.github/workflows/build.yml`](.github/workflows/build.yml).
+- **Pinned upstream commit.** `UPSTREAM_REF` in the workflow `env:` is a 40-char commit SHA.
+- **Renovate** ([`renovate.json`](renovate.json)) tracks `Dadoum/anisette-v3-server`’s `main` via the
+  `git-refs` datasource and opens a PR to bump `UPSTREAM_REF` when upstream moves. Never auto-merged —
+  an upstream bump can change provisioning behaviour and is only fully verifiable with a real device.
+- **Smoke gate.** Before publishing, CI builds the image and asserts the server binary, the non-root
+  `Alcoholic` user, and the **`/opt/anisette-v3/provisioning`** folder (PR #47) all exist. A pin that
+  predates PR #47 fails the build.
+- **Multi-arch.** `linux/amd64` + `linux/arm64`, built per-platform then merged into one manifest.
+
+## Tags
+
+| Tag | Meaning |
+|-----|---------|
+| `latest` | Newest build from the default branch |
+| `upstream-<short-sha>` | The pinned upstream commit this image was built from |
+
+## Updating the upstream pin
+
+1. Let Renovate open the bump PR (or edit `UPSTREAM_REF` by hand to a newer commit SHA from
+   `Dadoum/anisette-v3-server@main`).
+2. CI builds + smoke-tests it. Merge to `main` → the image publishes to GHCR.
+3. The Helm chart pulls `:latest` (Renovate there pins it by digest), so ArgoCD rolls it out.
+4. **Verify on a device** — sign in via SideStore — since provisioning can't be checked in CI.
 
 ## One-time setup
 
-The operator-facing setup — generating the device pairing record, sealing the secrets,
-and the one-time AltStore install — lives with the deployment, in the
-[`altserver` Helm chart README](https://github.com/Marck/helm-charts/tree/main/helm-charts/altserver#setup).
+After the **first** successful publish, make the GHCR package **public** so the cluster can pull it
+without an imagePullSecret (the `anisette` chart is intentionally secret-free):
 
-## Environment variables
+> GitHub → your profile → **Packages** → `anisette-v3-server` → **Package settings** →
+> **Change visibility** → **Public**.
 
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `ALTSERVER_ANISETTE_SERVER` | `http://127.0.0.1:6969` | anisette server URL (the sidecar) |
-| `PAIRING_RECORD_DIR` | `/secrets/lockdown` | read-only mount of the pairing record secret |
-| `LOCKDOWN_DIR` | `/var/lib/lockdown` | writable dir the record is copied into |
-| `ENABLE_AVAHI` | `true` | start avahi/dbus for mDNS |
-| `NETMUXD_WAIT` | `5` | seconds to let netmuxd discover the device before AltServer starts |
+## Local build (podman)
 
-## Build / versioning
+```bash
+# Build upstream's Dockerfile at the pinned commit, exactly like CI:
+REF=$(grep -oE 'UPSTREAM_REF: *"[a-f0-9]{40}"' .github/workflows/build.yml | grep -oE '[a-f0-9]{40}')
+podman build -t anisette-v3-server:local "https://github.com/Dadoum/anisette-v3-server.git#${REF}"
 
-Pinned upstream versions are build args in the `Dockerfile`
-(`ALTSERVER_VERSION`, `NETMUXD_VERSION`). The image version is the `VERSION` file; CI
-(`.github/workflows/build.yml`) reads it, builds both arches by digest, merges the
-manifest, and tags `=VERSION` / `latest` / `sha-<short>`. Bump `VERSION` to publish.
+# Confirm the -45054 fix (PR #47) is present:
+podman run --rm --entrypoint sh anisette-v3-server:local -c \
+  'test -d /opt/anisette-v3/provisioning && echo "provisioning folder OK"'
+```
 
-## Notes / caveats
+## History
 
-- Runs as **root**: usbmuxd/netmuxd/avahi need to bind the mux socket and do mDNS.
-- The exact muxd/avahi configuration can vary by environment; final validation requires a
-  real paired device on the LAN.
+This repo previously built `altserver-wifi` (AltServer-Linux + netmuxd). That approach is a dead end on
+iOS 17+ (Apple moved on-device services behind RemoteXPC), so it was replaced by SideStore + a
+self-hosted anisette server. The build pipeline was repurposed here.
