@@ -36,6 +36,37 @@ env:
   UPSTREAM_REF: "f749edcb80d803afafae34acaf32c848a955bbd4"
 
 jobs:
+  # GitHub disables scheduled workflows after 60 days of *repository* inactivity —
+  # and this repo is deliberately quiet: Renovate only touches it when upstream
+  # moves. The usual fix, gautamkrishnar/keepalive-workflow, was blocked by GitHub
+  # in April 2025, so we do the same thing inline: push an empty commit when the
+  # last one is older than 45 days, which resets the inactivity clock. Pushes made
+  # with GITHUB_TOKEN don't trigger workflows, so this can't loop.
+  keepalive:
+    name: Keep the schedule alive
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Push an empty commit if the repo has gone quiet
+        run: |
+          set -euo pipefail
+          age=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "Last commit was ${age} day(s) ago."
+          if [ "${age}" -lt 45 ]; then
+            echo "Below the 45-day threshold — nothing to do."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --allow-empty -m 'chore: keepalive so the scheduled build stays enabled'
+          git push
+
   # Builds the image and asserts the things that actually broke SideStore before
   # publishing: the server binary, the non-root user, and — critically — the
   # pre-created provisioning folder from upstream PR #47 (the -45054 fix). This is
