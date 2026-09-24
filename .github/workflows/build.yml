@@ -79,7 +79,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build amd64 image (load locally)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: "https://github.com/${{ env.UPSTREAM_REPO }}.git#${{ env.UPSTREAM_REF }}"
           load: true
@@ -143,7 +143,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: "https://github.com/${{ env.UPSTREAM_REPO }}.git#${{ env.UPSTREAM_REF }}"
           platforms: ${{ matrix.platform }}
