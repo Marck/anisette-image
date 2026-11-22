@@ -15,8 +15,11 @@ name: Build and Publish
 
 on:
   push:
+    # renovate/** builds and verifies without publishing, so Renovate can
+    # automerge on a green branch.
     branches:
       - main
+      - "renovate/**"
     paths:
       - '.github/workflows/**'
   pull_request:
@@ -34,6 +37,10 @@ env:
   UPSTREAM_REPO: Dadoum/anisette-v3-server
   # renovate: datasource=git-refs depName=Dadoum/anisette-v3-server currentValue=main
   UPSTREAM_REF: "f749edcb80d803afafae34acaf32c848a955bbd4"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # GitHub disables scheduled workflows after 60 days of *repository* inactivity —
@@ -125,7 +132,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/heads/renovate/')
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -148,19 +155,19 @@ jobs:
           context: "https://github.com/${{ env.UPSTREAM_REPO }}.git#${{ env.UPSTREAM_REF }}"
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/heads/renovate/') }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
       - name: Export digest
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/heads/renovate/')
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/heads/renovate/')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
@@ -171,7 +178,7 @@ jobs:
   merge:
     name: Merge manifests and push
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/heads/renovate/')
     needs: [build]
     permissions:
       contents: read
@@ -211,9 +218,10 @@ jobs:
       - name: Create and push multi-platform manifest
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          mapfile -t tag_args < <(jq -r '.tags[] | "-t", .' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          refs=()
+          for d in *; do refs+=("${{ env.IMAGE_NAME }}@sha256:$d"); done
+          docker buildx imagetools create "${tag_args[@]}" "${refs[@]}"
 
       - name: Inspect image
         run: |
